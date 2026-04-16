@@ -1,0 +1,72 @@
+--To check the last log Backup
+SELECT TOP 1
+    r.destination_database_name,
+    b.physical_device_name,
+    --b.backup_finish_date,
+    r.restore_date
+FROM msdb..restorehistory r
+JOIN msdb..backupset bs 
+    ON r.backup_set_id = bs.backup_set_id
+JOIN msdb..backupmediafamily b 
+    ON bs.media_set_id = b.media_set_id
+WHERE r.destination_database_name = 'DB Name'
+  AND r.restore_type = 'L'
+ORDER BY r.restore_date DESC;
+-----------------------------------------------------------
+DECLARE @RestorePath NVARCHAR(500) = 'E:\New folder\';
+DECLARE @cmd NVARCHAR(MAX);
+DECLARE @file NVARCHAR(500);
+
+------------------------------------------------------------
+-- STEP 1: Load all .trn files
+------------------------------------------------------------
+IF OBJECT_ID('tempdb..#LogFiles') IS NOT NULL DROP TABLE #LogFiles;
+
+CREATE TABLE #LogFiles (FileName NVARCHAR(500));
+
+INSERT INTO #LogFiles
+EXEC xp_cmdshell 'dir /b "E:\New folder\*.trn"';
+
+DELETE FROM #LogFiles 
+WHERE FileName IS NULL OR FileName NOT LIKE '%.trn';
+
+------------------------------------------------------------
+-- STEP 2: Cursor (START FROM SPECIFIC FILE)
+------------------------------------------------------------
+DECLARE file_cursor CURSOR FOR
+SELECT FileName 
+FROM #LogFiles
+WHERE FileName >= 'DB Name_20260416134225.trn'  -- 🔥 CHANGE THIS FILE
+ORDER BY FileName;
+
+OPEN file_cursor;
+FETCH NEXT FROM file_cursor INTO @file;
+
+------------------------------------------------------------
+-- STEP 3: Restore Loop
+------------------------------------------------------------
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @cmd = '
+    RESTORE LOG DB Name
+    FROM DISK = ''' + @RestorePath + @file + '''
+    WITH NORECOVERY;
+    ';
+
+    PRINT 'Restoring: ' + @file;
+
+    BEGIN TRY
+        EXEC(@cmd);
+    END TRY
+    BEGIN CATCH
+        PRINT '❌ Error restoring: ' + @file;
+        PRINT ERROR_MESSAGE();
+    END CATCH;
+
+    FETCH NEXT FROM file_cursor INTO @file;
+END
+
+CLOSE file_cursor;
+DEALLOCATE file_cursor;
+
+DROP TABLE #LogFiles;
